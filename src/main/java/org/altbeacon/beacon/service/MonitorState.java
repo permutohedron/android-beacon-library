@@ -26,7 +26,9 @@ package org.altbeacon.beacon.service;
 import org.altbeacon.beacon.BeaconManager;
 import org.altbeacon.beacon.logging.LogManager;
 
-public class MonitorState {
+import java.io.Serializable;
+
+public class MonitorState implements Serializable {
     private static final String TAG = "MonitorState";
     private boolean inside = false;
     private long lastSeenTime = 0l;

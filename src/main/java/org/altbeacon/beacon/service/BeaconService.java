@@ -28,7 +28,6 @@ import android.annotation.TargetApi;
 import android.app.Service;
 import android.bluetooth.BluetoothDevice;
 import android.content.Intent;
-import android.content.SharedPreferences;
 import android.content.pm.ApplicationInfo;
 import android.content.res.Configuration;
 import android.os.AsyncTask;
@@ -38,10 +37,7 @@ import android.os.Handler;
 import android.os.IBinder;
 import android.os.Message;
 import android.os.Messenger;
-import android.preference.PreferenceManager;
-
-import com.google.gson.Gson;
-import com.google.gson.reflect.TypeToken;
+import android.util.Log;
 
 import org.altbeacon.beacon.Beacon;
 import org.altbeacon.beacon.BeaconManager;
@@ -55,6 +51,11 @@ import org.altbeacon.beacon.service.scanner.CycledLeScanCallback;
 import org.altbeacon.beacon.service.scanner.CycledLeScanner;
 import org.altbeacon.bluetooth.BluetoothCrashResolver;
 
+import java.io.FileInputStream;
+import java.io.FileOutputStream;
+import java.io.IOException;
+import java.io.ObjectInputStream;
+import java.io.ObjectOutputStream;
 import java.lang.ref.WeakReference;
 import java.util.ArrayList;
 import java.util.Collection;
@@ -74,6 +75,7 @@ import java.util.concurrent.RejectedExecutionException;
 public class BeaconService extends Service {
     public static final String TAG = "BeaconService";
     private static final String PREF_KEY_MONITORED_REGION_STATE = "monitoredRegionState";
+    private static final String SCAN_STATE_FILE_NAME = "becon_scan_state";
 
     private final Map<Region, RangeState> rangedRegionState = new HashMap<Region, RangeState>();
     private final Map<Region, MonitorState> monitoredRegionState = new HashMap<Region, MonitorState>();
@@ -201,7 +203,7 @@ public class BeaconService extends Service {
         defaultDistanceCalculator = new ModelSpecificDistanceCalculator(this, BeaconManager.getDistanceModelUpdateUrl());
         Beacon.setDistanceCalculator(defaultDistanceCalculator);
 
-        resumeService();
+        readStateFromPreferences();
 
         // Look for simulated scan data
         try {
@@ -215,18 +217,6 @@ public class BeaconService extends Service {
         }
     }
 
-    private void resumeService() {
-        SharedPreferences preferences = PreferenceManager.getDefaultSharedPreferences(getApplicationContext());
-        HashMap<Region, MonitorState> stateWhenKilled =
-                new Gson().fromJson(
-                        preferences.getString(PREF_KEY_MONITORED_REGION_STATE, new Gson().toJson(new HashMap<Region, MonitorState>())),
-                        new TypeToken<HashMap<Region, MonitorState>>(){
-                        }.getType()
-                );
-        synchronized (monitoredRegionState) {
-            monitoredRegionState.putAll(stateWhenKilled);
-        }
-    }
 
     @Override
     public int onStartCommand(Intent intent, int flags, int startId) {
@@ -280,17 +270,59 @@ public class BeaconService extends Service {
     @Override
     public void onTaskRemoved(Intent rootIntent) {
         super.onTaskRemoved(rootIntent);
-        SharedPreferences preferences = PreferenceManager.getDefaultSharedPreferences(getApplicationContext());
-        LogManager.e(TAG, "onTaskRemoved(1" + rootIntent.toString() + ")");
-        String json = new Gson().toJson(monitoredRegionState);
-        LogManager.e(TAG, json);
+        LogManager.e(TAG, "onTaskRemoved()");
+        saveStateToPreferences();
+    }
+
+    private void saveStateToPreferences() {
+        LogManager.e(TAG, "saveState()");
+        FileOutputStream outputStream = null;
+        ObjectOutputStream objectOutputStream = null;
         try {
-            Thread.sleep(10000);
-        } catch (InterruptedException e) {
-            e.printStackTrace();
+            outputStream = getApplicationContext().openFileOutput(SCAN_STATE_FILE_NAME, MODE_PRIVATE);
+            objectOutputStream = new ObjectOutputStream(outputStream);
+
+            objectOutputStream.writeObject(monitoredRegionState);
+
+        } catch (IOException ignored) {
+            Log.e(TAG, "error saveState() ", ignored);
+        } finally {
+            if(null != outputStream){
+                try {
+                    outputStream.close();
+                } catch (IOException ignored) {}
+            }
+            if(objectOutputStream != null) {
+                try {
+                    objectOutputStream.close();
+                } catch (IOException ignored) {}
+            }
         }
-        preferences.edit().putString(PREF_KEY_MONITORED_REGION_STATE, json).commit();
-        LogManager.e(TAG, "onTaskRemoved(2" + rootIntent.toString() + ")");
+    }
+
+    private void readStateFromPreferences() {
+        FileInputStream inputStream = null;
+        ObjectInputStream objectInputStream = null;
+        try {
+            inputStream = getApplicationContext().openFileInput(SCAN_STATE_FILE_NAME);
+            objectInputStream = new ObjectInputStream(inputStream);
+            Map<Region, MonitorState> obj = (Map<Region,MonitorState>) objectInputStream.readObject();
+            monitoredRegionState.putAll(obj);
+
+        } catch (IOException | ClassNotFoundException | ClassCastException ignored) {
+        } finally {
+            if(null != inputStream){
+                try {
+                    inputStream.close();
+                } catch (IOException ignored) {}
+            }
+            if(objectInputStream != null) {
+                try {
+                    objectInputStream.close();
+                } catch (IOException ignored) {}
+            }
+        }
+
     }
 
     @Override
@@ -337,10 +369,7 @@ public class BeaconService extends Service {
     public void startMonitoringBeaconsInRegion(Region region, Callback callback) {
         LogManager.d(TAG, "startMonitoring called");
         synchronized (monitoredRegionState) {
-//            if (monitoredRegionState.containsKey(region)) {
-//                LogManager.i(TAG, "Already monitoring that region -- will replace existing region monitor.");
-//                monitoredRegionState.remove(region); // need to remove it, otherwise the old object will be retained because they are .equal
-//            }
+            if(!monitoredRegionState.containsKey(region))
             monitoredRegionState.put(region, new MonitorState(callback));
         }
         LogManager.d(TAG, "Currently monitoring %s regions.", monitoredRegionState.size());
