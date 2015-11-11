@@ -39,6 +39,7 @@ public class Callback implements Serializable {
     private String intentPackageName;
 
     public Callback(String intentPackageName) {
+
         this.intentPackageName = intentPackageName;
         initializeIntent();
     }

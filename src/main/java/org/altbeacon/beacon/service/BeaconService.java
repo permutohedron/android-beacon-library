@@ -203,7 +203,7 @@ public class BeaconService extends Service {
         defaultDistanceCalculator = new ModelSpecificDistanceCalculator(this, BeaconManager.getDistanceModelUpdateUrl());
         Beacon.setDistanceCalculator(defaultDistanceCalculator);
 
-        readStateFromPreferences();
+        restoreMonitoringState();
 
         // Look for simulated scan data
         try {
@@ -221,6 +221,7 @@ public class BeaconService extends Service {
     @Override
     public int onStartCommand(Intent intent, int flags, int startId) {
         LogManager.e(TAG, "onStartCommand()");
+        Log.e(TAG, intent == null ? "intent null" : intent.toString());
         return super.onStartCommand(intent, flags, startId);
     }
 
@@ -231,14 +232,12 @@ public class BeaconService extends Service {
     @Override
     public IBinder onBind(Intent intent) {
         LogManager.i(TAG, "binding");
-        bindCount++;
         return mMessenger.getBinder();
     }
 
     @Override
     public boolean onUnbind(Intent intent) {
         LogManager.i(TAG, "unbinding");
-        bindCount--;
         return false;
     }
 
@@ -253,6 +252,7 @@ public class BeaconService extends Service {
         LogManager.i(TAG, "onDestroy called.  stopping scanning");
         handler.removeCallbacksAndMessages(null);
         mCycledScanner.stop();
+        getApplicationContext().deleteFile(SCAN_STATE_FILE_NAME); // TODO: 12.11.2015 Maybe in a better way (I mean naming not actual way) ?
     }
 
     @Override
@@ -271,11 +271,11 @@ public class BeaconService extends Service {
     public void onTaskRemoved(Intent rootIntent) {
         super.onTaskRemoved(rootIntent);
         LogManager.e(TAG, "onTaskRemoved()");
-        saveStateToPreferences();
+        saveMonitoringState(); //TODO It might be unnecessary as we have to save it at every change
     }
 
-    private void saveStateToPreferences() {
-        LogManager.e(TAG, "saveState()");
+    private void saveMonitoringState() {
+        LogManager.e(TAG, "saveMonitoringState()");
         FileOutputStream outputStream = null;
         ObjectOutputStream objectOutputStream = null;
         try {
@@ -285,7 +285,7 @@ public class BeaconService extends Service {
             objectOutputStream.writeObject(monitoredRegionState);
 
         } catch (IOException ignored) {
-            Log.e(TAG, "error saveState() ", ignored);
+            Log.e(TAG, "error saveMonitoringState() ", ignored);
         } finally {
             if(null != outputStream){
                 try {
@@ -300,14 +300,16 @@ public class BeaconService extends Service {
         }
     }
 
-    private void readStateFromPreferences() {
+    private void restoreMonitoringState() {
         FileInputStream inputStream = null;
         ObjectInputStream objectInputStream = null;
         try {
             inputStream = getApplicationContext().openFileInput(SCAN_STATE_FILE_NAME);
             objectInputStream = new ObjectInputStream(inputStream);
             Map<Region, MonitorState> obj = (Map<Region,MonitorState>) objectInputStream.readObject();
-            monitoredRegionState.putAll(obj);
+            synchronized (monitoredRegionState) {
+                monitoredRegionState.putAll(obj);
+            }
 
         } catch (IOException | ClassNotFoundException | ClassCastException ignored) {
         } finally {
@@ -321,6 +323,7 @@ public class BeaconService extends Service {
                     objectInputStream.close();
                 } catch (IOException ignored) {}
             }
+            getApplicationContext().deleteFile(SCAN_STATE_FILE_NAME);
         }
 
     }
@@ -456,14 +459,17 @@ public class BeaconService extends Service {
     private void processExpiredMonitors() {
         synchronized (monitoredRegionState) {
             Iterator<Region> monitoredRegionIterator = monitoredRegionState.keySet().iterator();
+            boolean needsMonitoringStateSaving = false;
             while (monitoredRegionIterator.hasNext()) {
                 Region region = monitoredRegionIterator.next();
                 MonitorState state = monitoredRegionState.get(region);
                 if (state.isNewlyOutside()) {
+                    needsMonitoringStateSaving = true;
                     LogManager.d(TAG, "found a monitor that expired: %s", region);
                     state.getCallback().call(BeaconService.this, "monitoringData", new MonitoringData(state.isInside(), region));
                 }
             }
+            if(needsMonitoringStateSaving) saveMonitoringState();
         }
     }
 
@@ -492,14 +498,17 @@ public class BeaconService extends Service {
                         monitoredRegionState.keySet());
             }
             Iterator<Region> matchedRegionIterator = matchedRegions.iterator();
+            boolean needsMonitoringStateSaving = false;
             while (matchedRegionIterator.hasNext()) {
                 Region region = matchedRegionIterator.next();
                 MonitorState state = monitoredRegionState.get(region);
                 if (state != null && state.markInside()) {
+                    needsMonitoringStateSaving = true;
                     state.getCallback().call(BeaconService.this, "monitoringData",
                             new MonitoringData(state.isInside(), region));
                 }
             }
+            if(needsMonitoringStateSaving) saveMonitoringState();
 
             LogManager.d(TAG, "looking for ranging region matches for this beacon");
             synchronized (rangedRegionState) {

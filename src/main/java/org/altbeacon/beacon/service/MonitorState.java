@@ -51,7 +51,7 @@ public class MonitorState implements Serializable {
         }
         return false;
     }
-    public boolean isNewlyOutside() {
+    public boolean isNewlyOutside() { //FIXME oh my god it changes state of object
         if (inside) {
             if (lastSeenTime > 0 && System.currentTimeMillis() - lastSeenTime > BeaconManager.getRegionExitPeriod()) {
                 inside = false;
@@ -65,7 +65,7 @@ public class MonitorState implements Serializable {
         }
         return false;
     }
-    public boolean isInside() {
+    public boolean isInside() { //FIXME it also can change state through isNewlyOutside()
         if (inside) {
             if (!isNewlyOutside()) {
                 return true;
