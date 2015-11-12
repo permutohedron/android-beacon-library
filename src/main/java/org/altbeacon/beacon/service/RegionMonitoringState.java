@@ -28,13 +28,13 @@ import org.altbeacon.beacon.logging.LogManager;
 
 import java.io.Serializable;
 
-public class MonitorState implements Serializable {
-    private static final String TAG = "MonitorState";
+public class RegionMonitoringState implements Serializable {
+    private static final String TAG = RegionMonitoringState.class.getSimpleName();
     private boolean inside = false;
     private long lastSeenTime = 0l;
     private final Callback callback;
 
-    public MonitorState(Callback c) {
+    public RegionMonitoringState(Callback c) {
         callback = c;
     }
 

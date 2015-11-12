@@ -49,13 +49,9 @@ import org.altbeacon.beacon.distance.ModelSpecificDistanceCalculator;
 import org.altbeacon.beacon.logging.LogManager;
 import org.altbeacon.beacon.service.scanner.CycledLeScanCallback;
 import org.altbeacon.beacon.service.scanner.CycledLeScanner;
+import org.altbeacon.beacon.service.scanner.MonitoringManager;
 import org.altbeacon.bluetooth.BluetoothCrashResolver;
 
-import java.io.FileInputStream;
-import java.io.FileOutputStream;
-import java.io.IOException;
-import java.io.ObjectInputStream;
-import java.io.ObjectOutputStream;
 import java.lang.ref.WeakReference;
 import java.util.ArrayList;
 import java.util.Collection;
@@ -74,14 +70,12 @@ import java.util.concurrent.RejectedExecutionException;
 @TargetApi(5)
 public class BeaconService extends Service {
     public static final String TAG = "BeaconService";
-    private static final String PREF_KEY_MONITORED_REGION_STATE = "monitoredRegionState";
-    private static final String SCAN_STATE_FILE_NAME = "becon_scan_state";
 
     private final Map<Region, RangeState> rangedRegionState = new HashMap<Region, RangeState>();
-    private final Map<Region, MonitorState> monitoredRegionState = new HashMap<Region, MonitorState>();
+    private MonitoringManager monitoredRegions;
+
     int trackedBeaconsPacketCount;
     private final Handler handler = new Handler();
-    private int bindCount = 0;
     private BluetoothCrashResolver bluetoothCrashResolver;
     private DistanceCalculator defaultDistanceCalculator = null;
     private List<BeaconParser> beaconParsers;
@@ -203,8 +197,7 @@ public class BeaconService extends Service {
         defaultDistanceCalculator = new ModelSpecificDistanceCalculator(this, BeaconManager.getDistanceModelUpdateUrl());
         Beacon.setDistanceCalculator(defaultDistanceCalculator);
 
-        restoreMonitoringState();
-
+        monitoredRegions = MonitoringManager.getInstanceForApplication(getApplicationContext());
         // Look for simulated scan data
         try {
             Class klass = Class.forName("org.altbeacon.beacon.SimulatedScanData");
@@ -231,13 +224,13 @@ public class BeaconService extends Service {
      */
     @Override
     public IBinder onBind(Intent intent) {
-        LogManager.i(TAG, "binding");
+        LogManager.i(TAG, "binding" );
         return mMessenger.getBinder();
     }
 
     @Override
     public boolean onUnbind(Intent intent) {
-        LogManager.i(TAG, "unbinding");
+        LogManager.i(TAG, "unbinding" );
         return false;
     }
 
@@ -249,95 +242,41 @@ public class BeaconService extends Service {
             return;
         }
         bluetoothCrashResolver.stop();
-        LogManager.i(TAG, "onDestroy called.  stopping scanning");
+        LogManager.i(TAG, "onDestroy called.  stopping scanning" );
         handler.removeCallbacksAndMessages(null);
         mCycledScanner.stop();
-        getApplicationContext().deleteFile(SCAN_STATE_FILE_NAME); // TODO: 12.11.2015 Maybe in a better way (I mean naming not actual way) ?
+        monitoredRegions.stopStatePreservationOnManagerDestruction();
     }
 
     @Override
     public void onLowMemory() {
         super.onLowMemory();
-        LogManager.e(TAG, "lowMemory()");
+        LogManager.e(TAG, "lowMemory()" );
     }
 
     @Override
     public void onTrimMemory(int level) {
         super.onTrimMemory(level);
-        LogManager.e(TAG, "onTrimMemory(" + level + ")");
+        LogManager.e(TAG, "onTrimMemory(" + level + ")" );
     }
 
     @Override
     public void onTaskRemoved(Intent rootIntent) {
         super.onTaskRemoved(rootIntent);
-        LogManager.e(TAG, "onTaskRemoved()");
-        saveMonitoringState(); //TODO It might be unnecessary as we have to save it at every change
-    }
-
-    private void saveMonitoringState() {
-        LogManager.e(TAG, "saveMonitoringState()");
-        FileOutputStream outputStream = null;
-        ObjectOutputStream objectOutputStream = null;
-        try {
-            outputStream = getApplicationContext().openFileOutput(SCAN_STATE_FILE_NAME, MODE_PRIVATE);
-            objectOutputStream = new ObjectOutputStream(outputStream);
-
-            objectOutputStream.writeObject(monitoredRegionState);
-
-        } catch (IOException ignored) {
-            Log.e(TAG, "error saveMonitoringState() ", ignored);
-        } finally {
-            if(null != outputStream){
-                try {
-                    outputStream.close();
-                } catch (IOException ignored) {}
-            }
-            if(objectOutputStream != null) {
-                try {
-                    objectOutputStream.close();
-                } catch (IOException ignored) {}
-            }
-        }
-    }
-
-    private void restoreMonitoringState() {
-        FileInputStream inputStream = null;
-        ObjectInputStream objectInputStream = null;
-        try {
-            inputStream = getApplicationContext().openFileInput(SCAN_STATE_FILE_NAME);
-            objectInputStream = new ObjectInputStream(inputStream);
-            Map<Region, MonitorState> obj = (Map<Region,MonitorState>) objectInputStream.readObject();
-            synchronized (monitoredRegionState) {
-                monitoredRegionState.putAll(obj);
-            }
-
-        } catch (IOException | ClassNotFoundException | ClassCastException ignored) {
-        } finally {
-            if(null != inputStream){
-                try {
-                    inputStream.close();
-                } catch (IOException ignored) {}
-            }
-            if(objectInputStream != null) {
-                try {
-                    objectInputStream.close();
-                } catch (IOException ignored) {}
-            }
-            getApplicationContext().deleteFile(SCAN_STATE_FILE_NAME);
-        }
-
+        LogManager.e(TAG, "onTaskRemoved()" );
+        //saveMonitoringState(); //TODO It might be unnecessary as we have to save it at every change
     }
 
     @Override
     public void onConfigurationChanged(Configuration newConfig) {
         super.onConfigurationChanged(newConfig);
-        LogManager.e(TAG, "onConfigurationChanged()");
+        LogManager.e(TAG, "onConfigurationChanged()" );
     }
 
     @Override
     public void onRebind(Intent intent) {
         super.onRebind(intent);
-        LogManager.e(TAG, "oNRebind()");
+        LogManager.e(TAG, "oNRebind()" );
     }
 
 
@@ -348,7 +287,7 @@ public class BeaconService extends Service {
         synchronized (rangedRegionState) {
             if (rangedRegionState.containsKey(region)) {
                 LogManager.i(TAG, "Already ranging that region -- will replace existing region.");
-                rangedRegionState.remove(region); // need to remove it, otherwise the old object will be retained because they are .equal
+                rangedRegionState.remove(region); // need to remove it, otherwise the old object will be retained because they are .equal //FIXME That is not true
             }
             rangedRegionState.put(region, new RangeState(callback));
             LogManager.d(TAG, "Currently ranging %s regions.", rangedRegionState.size());
@@ -364,30 +303,23 @@ public class BeaconService extends Service {
             LogManager.d(TAG, "Currently ranging %s regions.", rangedRegionState.size());
         }
 
-        if (rangedRegionCount == 0 && monitoredRegionState.size() == 0) {
+        if (rangedRegionCount == 0 && monitoredRegions.count() == 0) {
             mCycledScanner.stop();
         }
     }
 
     public void startMonitoringBeaconsInRegion(Region region, Callback callback) {
-        LogManager.d(TAG, "startMonitoring called");
-        synchronized (monitoredRegionState) {
-            if(!monitoredRegionState.containsKey(region))
-            monitoredRegionState.put(region, new MonitorState(callback));
-        }
-        LogManager.d(TAG, "Currently monitoring %s regions.", monitoredRegionState.size());
+        LogManager.d(TAG, "startMonitoring called" );
+        monitoredRegions.addMonitoringRegion(region);
+        LogManager.d(TAG, "Currently monitoring %s regions.", monitoredRegions.count());
         mCycledScanner.start();
     }
 
     public void stopMonitoringBeaconsInRegion(Region region) {
-        int monitoredRegionCount;
         LogManager.d(TAG, "stopMonitoring called");
-        synchronized (monitoredRegionState) {
-            monitoredRegionState.remove(region);
-            monitoredRegionCount = monitoredRegionState.size();
-        }
-        LogManager.d(TAG, "Currently monitoring %s regions.", monitoredRegionState.size());
-        if (monitoredRegionCount == 0 && rangedRegionState.size() == 0) {
+        monitoredRegions.remove(region);
+        LogManager.d(TAG, "Currently monitoring %s regions.", monitoredRegions.count());
+        if (monitoredRegions.count() == 0 && rangedRegionState.size() == 0) {
             mCycledScanner.stop();
         }
     }
@@ -410,7 +342,7 @@ public class BeaconService extends Service {
 
         @Override
         public void onCycleEnd() {
-            processExpiredMonitors();
+            monitoredRegions.updateStatesFindNewOutside();
             processRangeData();
             // If we want to use simulated scanning data, do it here.  This is used for testing in an emulator
             if (simulatedScanData != null) {
@@ -446,30 +378,11 @@ public class BeaconService extends Service {
 
     private void processRangeData() {
         synchronized (rangedRegionState) {
-            Iterator<Region> regionIterator = rangedRegionState.keySet().iterator();
-            while (regionIterator.hasNext()) {
-                Region region = regionIterator.next();
+            for (Region region : rangedRegionState.keySet()) {
                 RangeState rangeState = rangedRegionState.get(region);
-                LogManager.d(TAG, "Calling ranging callback");
+                LogManager.d(TAG, "Calling ranging callback" );
                 rangeState.getCallback().call(BeaconService.this, "rangingData", new RangingData(rangeState.finalizeBeacons(), region));
             }
-        }
-    }
-
-    private void processExpiredMonitors() {
-        synchronized (monitoredRegionState) {
-            Iterator<Region> monitoredRegionIterator = monitoredRegionState.keySet().iterator();
-            boolean needsMonitoringStateSaving = false;
-            while (monitoredRegionIterator.hasNext()) {
-                Region region = monitoredRegionIterator.next();
-                MonitorState state = monitoredRegionState.get(region);
-                if (state.isNewlyOutside()) {
-                    needsMonitoringStateSaving = true;
-                    LogManager.d(TAG, "found a monitor that expired: %s", region);
-                    state.getCallback().call(BeaconService.this, "monitoringData", new MonitoringData(state.isInside(), region));
-                }
-            }
-            if(needsMonitoringStateSaving) saveMonitoringState();
         }
     }
 
@@ -477,7 +390,6 @@ public class BeaconService extends Service {
         if (Stats.getInstance().isEnabled()) {
             Stats.getInstance().log(beacon);
         }
-        trackedBeaconsPacketCount++;
         if (LogManager.isVerboseLoggingEnabled()) {
             LogManager.d(TAG,
                     "beacon detected : %s", beacon.toString());
@@ -492,24 +404,11 @@ public class BeaconService extends Service {
                         "not processing detections for GATT extra data beacon");
             }
         } else {
-            List<Region> matchedRegions = null;
-            synchronized (monitoredRegionState) {
-                matchedRegions = matchingRegions(beacon,
-                        monitoredRegionState.keySet());
-            }
-            Iterator<Region> matchedRegionIterator = matchedRegions.iterator();
-            boolean needsMonitoringStateSaving = false;
-            while (matchedRegionIterator.hasNext()) {
-                Region region = matchedRegionIterator.next();
-                MonitorState state = monitoredRegionState.get(region);
-                if (state != null && state.markInside()) {
-                    needsMonitoringStateSaving = true;
-                    state.getCallback().call(BeaconService.this, "monitoringData",
-                            new MonitoringData(state.isInside(), region));
-                }
-            }
-            if(needsMonitoringStateSaving) saveMonitoringState();
 
+            monitoredRegions.updateStateOfRegionsMatchingTo(beacon);
+
+            List<Region> matchedRegions = null;
+            Iterator<Region> matchedRegionIterator;
             LogManager.d(TAG, "looking for ranging region matches for this beacon");
             synchronized (rangedRegionState) {
                 matchedRegions = matchingRegions(beacon, rangedRegionState.keySet());
@@ -557,6 +456,7 @@ public class BeaconService extends Service {
             }
             if (beacon != null) {
                 mDetectionTracker.recordDetection();
+                trackedBeaconsPacketCount++;
                 processBeaconFromScan(beacon);
             }
             return null;
