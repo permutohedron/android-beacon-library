@@ -24,60 +24,58 @@ import java.util.Set;
 
 import static android.content.Context.MODE_PRIVATE;
 
-public class MonitoringManager { // TODO: 2015-11-12 Better name?
-    private static MonitoringManager instance;
-    private static final String TAG = MonitoringManager.class.getSimpleName();
-    private static final String DEFAULT_SCAN_STATE_FILE_NAME = "beacon_monitoring_state";
-    private final Map<Region, RegionMonitoringState> regionsStates
+public class MonitoringStatus {
+    private static MonitoringStatus sInstance;
+    private static final String TAG = MonitoringStatus.class.getSimpleName();
+    public static final String STATUS_PRESERVATION_FILE_NAME =
+            "org.altbeacon.beacon.service.monitoring_status_state";
+    private final Map<Region, RegionMonitoringState> mRegionsStatesMap
             = new HashMap<Region, RegionMonitoringState>();
 
     private Context context;
 
-    private int monitoringRegionsCount = 0;
     private boolean statePreservationIsOn = true;
 
-    public static MonitoringManager getInstanceForApplication(Context context) {
-        if (instance == null) {
-            synchronized (MonitoringManager.class) {
-                if (instance == null) {
-                    instance = new MonitoringManager(context.getApplicationContext());
+    public static MonitoringStatus getInstanceForApplication(Context context) {
+        if (sInstance == null) {
+            synchronized (MonitoringStatus.class) {
+                if (sInstance == null) {
+                    sInstance = new MonitoringStatus(context.getApplicationContext());
                 }
             }
         }
-        return instance;
+        return sInstance;
     }
 
-    public MonitoringManager(Context context) {
+    public MonitoringStatus(Context context) {
         this.context = context;
-        restoreMonitoringState();
+        restoreMonitoringStatus();
     }
 
-    public synchronized void addMonitoringRegion(Region region) {
-        if (regionsStates.containsKey(region)) return;
-        regionsStates.put(region, new RegionMonitoringState(new Callback(context.getPackageName())));
-        monitoringRegionsCount++;
-        saveMonitoringStateIfOn();
+    public synchronized void addRegion(Region region) {
+        if (mRegionsStatesMap.containsKey(region)) return;
+        mRegionsStatesMap.put(region, new RegionMonitoringState(new Callback(context.getPackageName())));
+        saveMonitoringStatusIfOn();
     }
 
-    public synchronized void remove(Region region) {
-        regionsStates.remove(region);
-        monitoringRegionsCount--;
-        saveMonitoringStateIfOn();
-    }
-
-    public synchronized int count() {
-        return monitoringRegionsCount;
+    public synchronized void removeRegion(Region region) {
+        mRegionsStatesMap.remove(region);
+        saveMonitoringStatusIfOn();
     }
 
     public synchronized Set<Region> regions() {
-        return regionsStates.keySet();
+        return mRegionsStatesMap.keySet();
+    }
+
+    public synchronized int regionsCount() {
+        return regions().size();
     }
 
     public synchronized RegionMonitoringState stateOf(Region region) {
-        return regionsStates.get(region);
+        return mRegionsStatesMap.get(region);
     }
 
-    public synchronized void updateStatesFindNewOutside() {
+    public synchronized void updateNewlyOutside() {
         Iterator<Region> monitoredRegionIterator = regions().iterator();
         boolean needsMonitoringStateSaving = false;
         while (monitoredRegionIterator.hasNext()) {
@@ -89,21 +87,21 @@ public class MonitoringManager { // TODO: 2015-11-12 Better name?
                 state.getCallback().call(context, "monitoringData", new MonitoringData(state.isInside(), region));
             }
         }
-        if (needsMonitoringStateSaving) saveMonitoringStateIfOn();
+        if (needsMonitoringStateSaving) saveMonitoringStatusIfOn();
     }
 
-    public synchronized void updateStateOfRegionsMatchingTo(Beacon beacon) {
+    public synchronized void updateNewlyInsideInRegionsContaining(Beacon beacon) {
         List<Region> matchingRegions = regionsMatchingTo(beacon);
         boolean needsMonitoringStateSaving = false;
         for(Region region : matchingRegions) {
-            RegionMonitoringState state = regionsStates.get(region);
+            RegionMonitoringState state = mRegionsStatesMap.get(region);
             if (state != null && state.markInside()) {
                 needsMonitoringStateSaving = true;
                 state.getCallback().call(context, "monitoringData",
                         new MonitoringData(state.isInside(), region));
             }
         }
-        if (needsMonitoringStateSaving) saveMonitoringStateIfOn();
+        if (needsMonitoringStateSaving) saveMonitoringStatusIfOn();
     }
 
     private List<Region> regionsMatchingTo(Beacon beacon) {
@@ -118,15 +116,15 @@ public class MonitoringManager { // TODO: 2015-11-12 Better name?
         return matched;
     }
 
-    private void saveMonitoringStateIfOn() {
+    private void saveMonitoringStatusIfOn() {
         if(!statePreservationIsOn) return;
-        LogManager.e(TAG, "saveMonitoringStateIfOn()" );
+        LogManager.e(TAG, "saveMonitoringStatusIfOn()" );
         FileOutputStream outputStream = null;
         ObjectOutputStream objectOutputStream = null;
         try {
-            outputStream = context.openFileOutput(DEFAULT_SCAN_STATE_FILE_NAME, MODE_PRIVATE);
+            outputStream = context.openFileOutput(STATUS_PRESERVATION_FILE_NAME, MODE_PRIVATE);
             objectOutputStream = new ObjectOutputStream(outputStream);
-            objectOutputStream.writeObject(regionsStates);
+            objectOutputStream.writeObject(mRegionsStatesMap);
 
         } catch (IOException e) {
             LogManager.e(TAG, "Error while saving monitored region states to file. %s ", e.getMessage());
@@ -146,14 +144,14 @@ public class MonitoringManager { // TODO: 2015-11-12 Better name?
         }
     }
 
-    private void restoreMonitoringState() {
+    private void restoreMonitoringStatus() {
         FileInputStream inputStream = null;
         ObjectInputStream objectInputStream = null;
         try {
-            inputStream = context.openFileInput(DEFAULT_SCAN_STATE_FILE_NAME);
+            inputStream = context.openFileInput(STATUS_PRESERVATION_FILE_NAME);
             objectInputStream = new ObjectInputStream(inputStream);
             Map<Region, RegionMonitoringState> obj = (Map<Region, RegionMonitoringState>) objectInputStream.readObject();
-            regionsStates.putAll(obj);
+            mRegionsStatesMap.putAll(obj);
 
         } catch (IOException | ClassNotFoundException | ClassCastException e) {
             if (e instanceof InvalidClassException) {
@@ -175,8 +173,13 @@ public class MonitoringManager { // TODO: 2015-11-12 Better name?
         }
     }
 
-    public synchronized void stopStatePreservationOnManagerDestruction() {
-        context.deleteFile(DEFAULT_SCAN_STATE_FILE_NAME);
+    public synchronized void stopStatusPreservationOnProcessDestruction() {
+        context.deleteFile(STATUS_PRESERVATION_FILE_NAME);
         this.statePreservationIsOn = false;
+    }
+
+    public synchronized void clear() {
+        context.deleteFile(STATUS_PRESERVATION_FILE_NAME);
+        mRegionsStatesMap.clear();
     }
 }
